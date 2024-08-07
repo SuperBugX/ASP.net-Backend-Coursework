@@ -1,0 +1,61 @@
+FROM ubuntu:18.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update
+RUN apt-get -y install wget
+RUN apt-get -y install gnupg2
+
+# explicitly set user/group IDs -- Postgres
+RUN set -eux; \
+	groupadd -r postgres --gid=1002; \
+	useradd -r -g postgres --uid=1001 --home-dir=/var/lib/postgresql --shell=/bin/bash postgres; \
+# also create the postgres user's home directory with appropriate permissions
+# see https://github.com/docker-library/postgres/issues/274
+	mkdir -p /var/lib/postgresql; \
+	chown -R postgres:postgres /var/lib/postgresql
+
+ENV POSTGRES_VERSION 9.6
+
+RUN apt-get -y update
+
+RUN apt-key adv --keyserver keyserver.ubuntu.com --recv-keys B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8
+RUN echo "deb http://apt.postgresql.org/pub/repos/apt/ bionic-pgdg main" > /etc/apt/sources.list.d/pgdg.list
+
+# Install  ``software-properties-common`` and PostgreSQL 9.6
+#  There are some warnings (in red) that show up during the build. You can hide
+#  them by prefixing each apt-get statement with DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y software-properties-common postgresql-"$POSTGRES_VERSION" postgresql-client-"$POSTGRES_VERSION" postgresql-contrib-"$POSTGRES_VERSION"
+
+ENV PATH $PATH:/usr/lib/postgresql/"$POSTGRES_VERSION"/bin
+
+RUN echo "host all  all    0.0.0.0/0  md5" >> /etc/postgresql/"$POSTGRES_VERSION"/main/pg_hba.conf
+RUN echo "listen_addresses='*'" >> /etc/postgresql/"$POSTGRES_VERSION"/main/postgresql.conf
+RUN echo "local all postgres trust" >> /etc/postgresql/"$POSTGRES_VERSION"/main/pg_hba.conf
+
+# Fix ssl permissions issue
+RUN chown postgres:ssl-cert /etc/ssl/private/ ; \
+    chown postgres:postgres /etc/ssl/private/ssl-cert-snakeoil.key ; \
+    chmod 0600 /etc/ssl/private/ssl-cert-snakeoil.key
+
+# Make temp folder for builds
+RUN mkdir /tmp/builds ; \
+    chown postgres:postgres /tmp/builds
+
+RUN mkdir -p /var/run/postgresql ; \
+	chown -R postgres:postgres /var/run/postgresql ; \
+	chmod 2777 /var/run/postgresql
+
+# Correct the Error: could not open temporary statistics file "/var/run/postgresql/9.6-main.pg_stat_tmp/global.tmp": No such file or directory
+RUN mkdir -p /var/run/postgresql/"$POSTGRES_VERSION"-main.pg_stat_tmp
+RUN chown -R postgres:postgres /var/run/postgresql/"$POSTGRES_VERSION"-main.pg_stat_tmp
+
+RUN mkdir /CREATE ; \
+	chown -R postgres:postgres /CREATE
+
+COPY ./create-database.sql /CREATE/create-database.sql
+COPY ./create-tables.sql /CREATE/create-tables.sql
+
+# Add VOLUMEs to allow backup of config, logs and databases
+EXPOSE 5432
+CMD ["sh", "-c", "postgres --config-file=/etc/postgresql/${POSTGRES_VERSION}/main/postgresql.conf"]
